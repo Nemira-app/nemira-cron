@@ -1,0 +1,107 @@
+name: cron
+
+# Scheduled pinger for nemira.app's /api/cron/* endpoints.
+# Lives in this PUBLIC repo so scheduled runs use GitHub's unlimited free
+# public-repo minutes instead of the app repo's 2,000/month private quota
+# (which a 5-minute schedule alone exhausts in ~1 week at the 1-minute
+# per-run billing minimum).
+#
+# Endpoints are bearer-token protected (constant-time compare server-side).
+# CRON_SECRET lives as a repo secret here and as a Fly secret on the app.
+# PUBLIC-REPO LOG RULE: never print response bodies — status codes only.
+#
+# GitHub Actions cron is best-effort and can drift up to ~15 min at peak.
+# The handlers absorb drift with wider time windows than the cadence.
+
+on:
+  schedule:
+    # Booking reminders + transcription finalize: every 5 min.
+    - cron: "*/5 * * * *"
+    # Daily summary + recall nudges: 13:00 UTC ~ 8-9am ET.
+    - cron: "0 13 * * *"
+    # Weekly summary: Monday 13:00 UTC.
+    - cron: "0 13 * * 1"
+    # Lead unread nudge + usage alerts: hourly.
+    - cron: "15 * * * *"
+    # QuickBooks reconciliation: 05:00 UTC daily.
+    - cron: "0 5 * * *"
+    # LoginAttempt cleanup (30-day retention): 04:00 UTC daily.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      handler:
+        description: "Which cron endpoint to fire (manual run)"
+        required: true
+        type: choice
+        options:
+          - booking-reminders-24h
+          - booking-reminders-1h
+          - clinic-daily-summary
+          - clinic-weekly-summary
+          - lead-unread-nudge
+          - quickbooks-reconcile
+          - purge-login-attempts
+          - transcription-finalize
+          - usage-alerts
+          - recall-nudges
+
+env:
+  APP_URL: ${{ vars.APP_URL || 'https://nemira.app' }}
+
+jobs:
+  fire:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compute targets
+        id: targets
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "endpoints=${{ inputs.handler }}" >> $GITHUB_OUTPUT
+          else
+            case "${{ github.event.schedule }}" in
+              "*/5 * * * *")
+                echo "endpoints=booking-reminders-1h booking-reminders-24h transcription-finalize" >> $GITHUB_OUTPUT
+                ;;
+              "0 13 * * *")
+                echo "endpoints=clinic-daily-summary recall-nudges" >> $GITHUB_OUTPUT
+                ;;
+              "0 13 * * 1")
+                echo "endpoints=clinic-weekly-summary" >> $GITHUB_OUTPUT
+                ;;
+              "15 * * * *")
+                echo "endpoints=lead-unread-nudge usage-alerts" >> $GITHUB_OUTPUT
+                ;;
+              "0 5 * * *")
+                echo "endpoints=quickbooks-reconcile" >> $GITHUB_OUTPUT
+                ;;
+              "0 4 * * *")
+                echo "endpoints=purge-login-attempts" >> $GITHUB_OUTPUT
+                ;;
+              *)
+                echo "endpoints=" >> $GITHUB_OUTPUT
+                ;;
+            esac
+          fi
+
+      - name: Fire endpoints
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET is not set as a repo secret. Aborting."
+            exit 1
+          fi
+
+          fail=0
+          for endpoint in ${{ steps.targets.outputs.endpoints }}; do
+            url="${APP_URL%/}/api/cron/${endpoint}"
+            # Public repo: log status only, NEVER the response body.
+            http_status=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${CRON_SECRET}" \
+              "${url}")
+            echo "${endpoint}: ${http_status}"
+            if [ "${http_status}" -ge 400 ]; then
+              fail=1
+            fi
+          done
+          exit $fail
