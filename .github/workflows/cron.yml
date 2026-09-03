@@ -108,3 +108,7 @@ jobs:
             fi
           done
           exit $fail
+
+# Schedule re-registered 2026-09-03: GitHub re-reads cron triggers on a push
+# to the default branch, and this workflow was re-enabled after its last push,
+# so the schedules never rearmed. A no-op commit is the documented nudge.
