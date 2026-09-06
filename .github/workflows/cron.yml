@@ -51,6 +51,10 @@ on:
           - usage-alerts
           - recall-nudges
           - membership-benefit-reminders
+          - review-requests
+          - deposit-abandon-sweep
+          - calendar-sync-retry
+          - sessions-sweep
 
 env:
   APP_URL: ${{ vars.APP_URL || 'https://nemira.app' }}
