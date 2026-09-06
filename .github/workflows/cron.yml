@@ -17,17 +17,21 @@ on:
   schedule:
     # Booking reminders + transcription finalize: every 5 min.
     - cron: "*/5 * * * *"
-    # Daily summary + recall nudges + membership benefit reminders:
+    # Daily summary + recall nudges + membership benefit reminders + review
+    # requests:
     # 13:00 UTC ~ 8-9am ET. The benefit reminder only emails from day 22 of
     # the clinic's month, so most days it is a no-op.
     - cron: "0 13 * * *"
     # Weekly summary: Monday 13:00 UTC.
     - cron: "0 13 * * 1"
-    # Lead unread nudge + usage alerts: hourly.
+    # Lead unread nudge + usage alerts + deposit-abandon sweep + calendar sync
+    # retry: hourly. The deposit sweep reaps bookings whose Stripe Checkout was
+    # abandoned; without it the slot stays reserved forever.
     - cron: "15 * * * *"
     # QuickBooks reconciliation: 05:00 UTC daily.
     - cron: "0 5 * * *"
-    # LoginAttempt cleanup (30-day retention): 04:00 UTC daily.
+    # LoginAttempt cleanup (30-day retention) + expired session/magic-link
+    # sweep: 04:00 UTC daily.
     - cron: "0 4 * * *"
   workflow_dispatch:
     inputs:
@@ -66,19 +70,19 @@ jobs:
                 echo "endpoints=booking-reminders-1h booking-reminders-24h transcription-finalize" >> $GITHUB_OUTPUT
                 ;;
               "0 13 * * *")
-                echo "endpoints=clinic-daily-summary recall-nudges membership-benefit-reminders" >> $GITHUB_OUTPUT
+                echo "endpoints=clinic-daily-summary recall-nudges membership-benefit-reminders review-requests" >> $GITHUB_OUTPUT
                 ;;
               "0 13 * * 1")
                 echo "endpoints=clinic-weekly-summary" >> $GITHUB_OUTPUT
                 ;;
               "15 * * * *")
-                echo "endpoints=lead-unread-nudge usage-alerts" >> $GITHUB_OUTPUT
+                echo "endpoints=lead-unread-nudge usage-alerts deposit-abandon-sweep calendar-sync-retry" >> $GITHUB_OUTPUT
                 ;;
               "0 5 * * *")
                 echo "endpoints=quickbooks-reconcile" >> $GITHUB_OUTPUT
                 ;;
               "0 4 * * *")
-                echo "endpoints=purge-login-attempts" >> $GITHUB_OUTPUT
+                echo "endpoints=purge-login-attempts sessions-sweep" >> $GITHUB_OUTPUT
                 ;;
               *)
                 echo "endpoints=" >> $GITHUB_OUTPUT
