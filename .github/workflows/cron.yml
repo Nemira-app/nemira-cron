@@ -18,7 +18,7 @@ on:
     # Booking reminders + transcription finalize: every 5 min.
     - cron: "*/5 * * * *"
     # Daily summary + recall nudges + membership benefit reminders + review
-    # requests:
+    # requests + free-trial reminder emails + extra-practitioner billing sync:
     # 13:00 UTC ~ 8-9am ET. The benefit reminder only emails from day 22 of
     # the clinic's month, so most days it is a no-op.
     - cron: "0 13 * * *"
@@ -55,6 +55,8 @@ on:
           - deposit-abandon-sweep
           - calendar-sync-retry
           - sessions-sweep
+          - trial-reminders
+          - seat-billing-sync
 
 env:
   APP_URL: ${{ vars.APP_URL || 'https://nemira.app' }}
@@ -74,7 +76,7 @@ jobs:
                 echo "endpoints=booking-reminders-1h booking-reminders-24h transcription-finalize" >> $GITHUB_OUTPUT
                 ;;
               "0 13 * * *")
-                echo "endpoints=clinic-daily-summary recall-nudges membership-benefit-reminders review-requests" >> $GITHUB_OUTPUT
+                echo "endpoints=clinic-daily-summary recall-nudges membership-benefit-reminders review-requests trial-reminders seat-billing-sync" >> $GITHUB_OUTPUT
                 ;;
               "0 13 * * 1")
                 echo "endpoints=clinic-weekly-summary" >> $GITHUB_OUTPUT
