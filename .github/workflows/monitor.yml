@@ -1,0 +1,62 @@
+name: monitor
+
+# Backstop alarm for nemira.app. The run fails, and GitHub emails the failure,
+# when any of these is true:
+#   - nemira.app or www.nemira.app does not answer /api/health with a 200
+#   - either certificate has under 21 days left. Fly renews at about 30 days, so
+#     this means renewal has been failing for over a week. The apex certificate
+#     lapsed this way on 2026-11-01, unnoticed for 4 days.
+#   - /api/health/cron reports a scheduled job overdue or failing
+#
+# GitHub's scheduler is best-effort and can go hours between runs, so this is the
+# backstop, not the fast alarm. An external uptime service is the fast alarm.
+#
+# PUBLIC-REPO LOG RULE: status codes and day counts only, never response bodies.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check site, certificates and scheduled jobs
+        env:
+          HOSTS: nemira.app www.nemira.app
+          HEALTH_PATH: /api/health
+          JOBS_URL: https://nemira.app/api/health/cron
+          MIN_CERT_DAYS: "21"
+        run: |
+          fail=0
+
+          # Retries ride out a single blip, so one bad request does not alert.
+          status() {
+            curl -sS -m 30 --retry 2 --retry-all-errors --retry-delay 20 \
+              -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || true
+          }
+
+          for host in $HOSTS; do
+            code=$(status "https://${host}${HEALTH_PATH}")
+            echo "${host} site: ${code}"
+            [ "$code" = "200" ] || fail=1
+
+            not_after=$(echo | timeout 20 openssl s_client -connect "${host}:443" -servername "${host}" 2>/dev/null \
+              | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+            if [ -z "$not_after" ]; then
+              echo "${host} certificate: unreadable"
+              fail=1
+              continue
+            fi
+            days=$(( ( $(date -d "$not_after" +%s) - $(date +%s) ) / 86400 ))
+            echo "${host} certificate: ${days} days left"
+            [ "$days" -ge "$MIN_CERT_DAYS" ] || fail=1
+          done
+
+          code=$(status "$JOBS_URL")
+          echo "scheduled jobs: ${code}"
+          [ "$code" = "200" ] || fail=1
+
+          exit $fail
