@@ -1,38 +1,20 @@
 name: cron
 
-# Scheduled pinger for nemira.app's /api/cron/* endpoints.
-# Lives in this PUBLIC repo so scheduled runs use GitHub's unlimited free
-# public-repo minutes instead of the app repo's 2,000/month private quota
-# (which a 5-minute schedule alone exhausts in ~1 week at the 1-minute
-# per-run billing minimum).
+# Manual runs of nemira.app's /api/cron/* endpoints, for testing or a one-off
+# re-run.
+#
+# The schedules moved inside the app on 2026-11-05 (src/lib/cron/schedule.ts in
+# the app repo). GitHub's scheduler fired about 13 runs a day against ~315
+# expected and ran daily jobs 7 to 8 hours late.
+#
+# DO NOT add a schedule here. clinic-daily-summary and clinic-weekly-summary have
+# no dedup of their own, so a second scheduler emails clinics twice.
 #
 # Endpoints are bearer-token protected (constant-time compare server-side).
 # CRON_SECRET lives as a repo secret here and as a Fly secret on the app.
-# PUBLIC-REPO LOG RULE: never print response bodies — status codes only.
-#
-# GitHub Actions cron is best-effort and can drift up to ~15 min at peak.
-# The handlers absorb drift with wider time windows than the cadence.
+# PUBLIC-REPO LOG RULE: never print response bodies, status codes only.
 
 on:
-  schedule:
-    # Booking reminders + transcription finalize: every 5 min.
-    - cron: "*/5 * * * *"
-    # Daily summary + recall nudges + membership benefit reminders + review
-    # requests + free-trial reminder emails + extra-practitioner billing sync:
-    # 13:00 UTC ~ 8-9am ET. The benefit reminder only emails from day 22 of
-    # the clinic's month, so most days it is a no-op.
-    - cron: "0 13 * * *"
-    # Weekly summary: Monday 13:00 UTC.
-    - cron: "0 13 * * 1"
-    # Lead unread nudge + usage alerts + deposit-abandon sweep + calendar sync
-    # retry: hourly. The deposit sweep reaps bookings whose Stripe Checkout was
-    # abandoned; without it the slot stays reserved forever.
-    - cron: "15 * * * *"
-    # QuickBooks reconciliation: 05:00 UTC daily.
-    - cron: "0 5 * * *"
-    # LoginAttempt cleanup (30-day retention) + expired session/magic-link
-    # sweep: 04:00 UTC daily.
-    - cron: "0 4 * * *"
   workflow_dispatch:
     inputs:
       handler:
@@ -65,60 +47,22 @@ jobs:
   fire:
     runs-on: ubuntu-latest
     steps:
-      - name: Compute targets
-        id: targets
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "endpoints=${{ inputs.handler }}" >> $GITHUB_OUTPUT
-          else
-            case "${{ github.event.schedule }}" in
-              "*/5 * * * *")
-                echo "endpoints=booking-reminders-1h booking-reminders-24h transcription-finalize" >> $GITHUB_OUTPUT
-                ;;
-              "0 13 * * *")
-                echo "endpoints=clinic-daily-summary recall-nudges membership-benefit-reminders review-requests trial-reminders seat-billing-sync" >> $GITHUB_OUTPUT
-                ;;
-              "0 13 * * 1")
-                echo "endpoints=clinic-weekly-summary" >> $GITHUB_OUTPUT
-                ;;
-              "15 * * * *")
-                echo "endpoints=lead-unread-nudge usage-alerts deposit-abandon-sweep calendar-sync-retry" >> $GITHUB_OUTPUT
-                ;;
-              "0 5 * * *")
-                echo "endpoints=quickbooks-reconcile" >> $GITHUB_OUTPUT
-                ;;
-              "0 4 * * *")
-                echo "endpoints=purge-login-attempts sessions-sweep" >> $GITHUB_OUTPUT
-                ;;
-              *)
-                echo "endpoints=" >> $GITHUB_OUTPUT
-                ;;
-            esac
-          fi
-
-      - name: Fire endpoints
+      - name: Fire endpoint
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          HANDLER: ${{ inputs.handler }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
             echo "CRON_SECRET is not set as a repo secret. Aborting."
             exit 1
           fi
 
-          fail=0
-          for endpoint in ${{ steps.targets.outputs.endpoints }}; do
-            url="${APP_URL%/}/api/cron/${endpoint}"
-            # Public repo: log status only, NEVER the response body.
-            http_status=$(curl -sS -o /dev/null -w '%{http_code}' \
-              -H "Authorization: Bearer ${CRON_SECRET}" \
-              "${url}")
-            echo "${endpoint}: ${http_status}"
-            if [ "${http_status}" -ge 400 ]; then
-              fail=1
-            fi
-          done
-          exit $fail
-
-# Schedule re-registered 2026-09-03: GitHub re-reads cron triggers on a push
-# to the default branch, and this workflow was re-enabled after its last push,
-# so the schedules never rearmed. A no-op commit is the documented nudge.
+          # Public repo: log status only, NEVER the response body.
+          http_status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${APP_URL%/}/api/cron/${HANDLER}" || true)
+          echo "${HANDLER}: ${http_status}"
+          case "$http_status" in
+            2*|3*) ;;
+            *) exit 1 ;;
+          esac
