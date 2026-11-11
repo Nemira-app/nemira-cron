@@ -1,0 +1,66 @@
+name: loadtest
+
+# Manual load test of nemira.app's PUBLIC pages from GitHub's network, which
+# is far faster than a home connection, so the result measures the site, not
+# the tester. Signed-out GET requests only: no forms, no sign-in, no writes.
+# Includes the clinic page and booking page, which read the database.
+#
+# PUBLIC-REPO LOG RULE: aggregate counts and timings only, never bodies.
+
+on:
+  workflow_dispatch:
+    inputs:
+      users:
+        description: "Simultaneous visitors"
+        required: true
+        default: "10"
+      seconds:
+        description: "How long to run"
+        required: true
+        default: "60"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Load test public pages
+        env:
+          USERS: ${{ inputs.users }}
+          SECONDS_TOTAL: ${{ inputs.seconds }}
+        run: |
+          cat > lt.mjs <<'EOF'
+          const BASE = "https://nemira.app";
+          const PATHS = ["/", "/pricing", "/start", "/c/northgrove-hair-institute",
+            "/book/northgrove-hair-institute", "/baa", "/api/health"];
+          const users = Math.min(50, Number(process.env.USERS) || 10);
+          const until = Date.now() + Math.min(300, Number(process.env.SECONDS_TOTAL) || 60) * 1000;
+          const stats = {};
+          async function hit(path) {
+            const t = Date.now();
+            let status = 0;
+            try {
+              const r = await fetch(BASE + path, { signal: AbortSignal.timeout(30000), redirect: "manual" });
+              await r.arrayBuffer();
+              status = r.status;
+            } catch { status = 0; }
+            const s = (stats[path] ??= { n: 0, bad: 0, ms: [] });
+            s.n++; s.ms.push(Date.now() - t);
+            if (status === 0 || status >= 500) s.bad++;
+          }
+          async function visitor(i) {
+            let k = i;
+            while (Date.now() < until) { await hit(PATHS[k++ % PATHS.length]); }
+          }
+          const t0 = Date.now();
+          await Promise.all(Array.from({ length: users }, (_, i) => visitor(i)));
+          const pct = (a, p) => a.sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * p))];
+          let total = 0, bad = 0;
+          console.log(`users=${users} seconds=${Math.round((Date.now() - t0) / 1000)}`);
+          for (const [p, s] of Object.entries(stats)) {
+            total += s.n; bad += s.bad;
+            console.log(`${p.padEnd(34)} n=${String(s.n).padStart(5)} errors=${s.bad} p50=${pct(s.ms, 0.5)}ms p95=${pct(s.ms, 0.95)}ms max=${Math.max(...s.ms)}ms`);
+          }
+          console.log(`TOTAL requests=${total} errors=${bad} rate=${(total / ((Date.now() - t0) / 1000)).toFixed(1)}/s`);
+          EOF
+          node lt.mjs
