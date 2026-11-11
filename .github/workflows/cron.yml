@@ -39,6 +39,7 @@ on:
           - sessions-sweep
           - trial-reminders
           - seat-billing-sync
+          - sms-reminders
 
 env:
   APP_URL: ${{ vars.APP_URL || 'https://nemira.app' }}
